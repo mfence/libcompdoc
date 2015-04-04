@@ -103,9 +103,9 @@ parse_msat_from_sectors(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat)
 
     int err;
     uint8_t *buffer;
+    ssize_t bytes_read;
     uint32_t *p, msat_sector;
     uint32_t msat_per_sector;
-    ssize_t bytes_read;
 
     err = COMP_DOC_SUCCESS;
     buffer = NULL;
@@ -117,6 +117,8 @@ parse_msat_from_sectors(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat)
         goto _error;
     }
     
+    // The whole sector - except the last four bytes - is filled up
+    // with MSAT IDs. Each MSAT SecID is an integer, meaning it is four bytes.
     msat_per_sector = (CALC_SECTOR_SIZE(hdr->ssz) - 4) / 4;
     
     msat->secids = realloc(msat->secids, (COMP_DOC_HEADER_MSAT_SLOTS + msat_per_sector * hdr->nmsat_sectors) * sizeof(uint32_t));
@@ -200,6 +202,7 @@ parse_msat(int fd, comp_doc_header_t *header, comp_doc_msat_t **ret_msat)
 
     msat->slots = 0;
     msat->secids = NULL;
+
 
     // although the sector size may be small, the buffer should be
     // big enough to hold the MSAT that have not been read yet 
@@ -375,10 +378,10 @@ int
 parse_sat(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat, comp_doc_sat_t **ret_sat)
 {
     int i, err;
-    uint32_t *p, tmp;
     uint8_t *buffer;
     ssize_t bytes_read;
-    unsigned int sector_index;
+    comp_doc_secid_value_t *p, tmp;
+    comp_doc_secid_value_t sector_index;
     comp_doc_sat_t *sat;
 
     *ret_sat = NULL;
@@ -394,7 +397,9 @@ parse_sat(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat, comp_doc_sat_t 
         goto _error;
     }
 
+    // The whole sector is used as SAT.
     sat->slots = (CALC_SECTOR_SIZE(hdr->ssz) * hdr->nsat_sectors) / 4;
+    // XXX: may overflow here
     sat->secids = malloc(sat->slots * sizeof(comp_doc_sector_id_t));
 
     if(sat->secids == NULL)
@@ -413,7 +418,9 @@ parse_sat(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat, comp_doc_sat_t 
     
     for(i = 0; i < msat->slots; i++)
     {
+
         lseek(fd, sector_position(hdr, msat->secids[i]), SEEK_SET);
+        /* Read the sector that is indicated by MSAT */
         bytes_read = read_exactly(fd, buffer, CALC_SECTOR_SIZE(hdr->ssz));
         
         if(bytes_read < 0)
@@ -432,7 +439,14 @@ parse_sat(int fd, comp_doc_header_t *hdr, comp_doc_msat_t *msat, comp_doc_sat_t 
             
             if(tmp < SECID_MSAT)
             {
+                // if tmp is a just regular sector
+
                 // XXX: if tmp is not checked, this can lead to a serious vulnerability
+                if(tmp >= sat->slots)
+                {
+                    err = COMP_DOC_INVALID_SAT;
+                    goto _error;
+                }
                 sat->secids[sector_index].next = &sat->secids[tmp];
             }
             else
@@ -546,6 +560,46 @@ _error:
     return err;
 }
 
+
+/* 
+ * This function contains some basic checks to ensure that the header 
+ * is not corrupted or malformed.
+ */
+int
+check_header_sanity(comp_doc_header_t *hdr)
+{
+    // Probably I could include all comparison that exist in this function
+    // in a single if statement. However, I chose to do like this for readability reasons.
+    // Hopefully the compiler will produce highly optimized code :)
+    int err = COMP_DOC_SUCCESS;
+
+    if(memcmp(hdr->magic, COMP_DOC_MAGIC, 0x8))
+        err = COMP_DOC_INSANE_HEADER;
+
+    #ifdef COMP_DOC_SUPPORT_ONLY_LITTLE_ENDIAN
+    if(hdr->byte_order != COMP_DOC_LITTLE_ENDIAN)
+        err = COMP_DOC_INSANE_HEADER;
+    #endif /* COMP_DOC_SUPPORT_ONLY_LITTLE_ENDIAN */
+
+    if(hdr->ssz < 7 || hdr->ssz > COMP_DOC_SSZ_MAX)
+        err = COMP_DOC_INSANE_HEADER;
+
+    // XXX: is the second condition required ?
+    if(hdr->sssz > hdr->ssz || hdr->sssz == 0)
+        err = COMP_DOC_INSANE_HEADER;
+
+    if(hdr->stream_min_size < 0x1000)
+        err = COMP_DOC_INSANE_HEADER;
+
+    if(hdr->nssat_sectors == 0 && hdr->first_ssat_sector != SECID_END_OF_CHAIN)
+        err = COMP_DOC_INSANE_HEADER;
+
+    if(hdr->nmsat_sectors == 0 && hdr->msat_first_sector != SECID_END_OF_CHAIN)
+        err = COMP_DOC_INSANE_HEADER;
+
+    return err;
+}
+
 int 
 parse_header(int fd, comp_doc_header_t **ret_hdr)
 {
@@ -572,9 +626,14 @@ parse_header(int fd, comp_doc_header_t **ret_hdr)
 
     *ret_hdr = hdr;
 
+    err = check_header_sanity(hdr);    
+
 _error:
     if(err != COMP_DOC_SUCCESS)
+    {
+        *ret_hdr = NULL;
         free_header(hdr);
+    }
 
     return err;
 }

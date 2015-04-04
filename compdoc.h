@@ -2,10 +2,19 @@
 #define _CFBF_H_
 #define _DEBUG_
 #include <stdint.h>
+#include <stdlib.h>
+// Currenty, it supports only the little endian format.
+#define COMP_DOC_SUPPORT_ONLY_LITTLE_ENDIAN
+
+// I didn't find any reference for ssz max size. This limitation is set by me,
+// for security purposes. You may change it, but be cautious for possible integer overflows.
+// (ssz stands for sector size, refer in header's struct for more info)
+#define COMP_DOC_SSZ_MAX 0x10
+
 
 #define COMP_DOC_MAGIC "\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-#define COMP_DOC_BIG_ENDIAN 0xFFFE
-#define COMP_DOC_LITTLE_ENDIAN 0xFEFF
+#define COMP_DOC_BIG_ENDIAN 0xFEFF
+#define COMP_DOC_LITTLE_ENDIAN 0xFFFE
 #define COMP_DOC_SSZ_MIN 7
 #define COMP_DOC_STREAM_MIN_SIZE 0x1000
 
@@ -62,9 +71,11 @@ typedef struct {
     uint32_t unused;  
 } __attribute__((packed)) comp_doc_directory_t;
 
+typedef uint32_t comp_doc_secid_value_t;
+
 struct comp_doc_sector_id {
-    uint32_t offset;
-    uint32_t value;
+    size_t offset;
+    comp_doc_secid_value_t value;
     // if value is positive then next
     // points to the next sector in the chain
     struct comp_doc_sector_id *next;
@@ -141,6 +152,8 @@ typedef struct {
     unsigned int ndirs;
 } comp_doc_file_t;
 
+#define COMP_DOC_INVALID_SAT        (-9)
+#define COMP_DOC_INSANE_HEADER      (-8)
 #define COMP_DOC_SEEK_ERR           (-7)
 #define COMP_DOC_NO_DIRS            (-6)
 #define COMP_DOC_INVALID_MSAT       (-5)

@@ -14,7 +14,10 @@ int main(int argc, char **argv)
     uint32_t dirid = 0;
 
     if((dirid = comp_doc_open(argv[1], COMP_DOC_PERM_READ_WRITE, &file)) != 0)
+    {
+        fprintf(stderr, "failed to open file %s (%d)\n", argv[1], (int32_t)dirid);
         return -1;
+    }
 
     comp_doc_directory_t *directory;
     
